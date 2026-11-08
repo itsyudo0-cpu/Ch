@@ -22,6 +22,7 @@ from bot.utils.button_parser import (
     ButtonParseError,
     PREVIEW_VOTE_TOKEN,
     build_inline_keyboard,
+    cycle_button_style,
     has_vote_buttons,
     new_vote_token,
     format_buttons_dsl,
@@ -308,6 +309,35 @@ async def cb_draft_remove_single_button(
             reply_markup=button_builder_keyboard(updated_rows),
         )
     await callback.answer("Button removed.")
+
+
+@router.callback_query(
+    NewPostStates.managing_buttons, F.data.startswith("draftbtn:clr:")
+)
+async def cb_draft_recolor_button(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = callback.data.split(":")  # type: ignore[union-attr]
+    row_idx, col_idx = int(parts[2]), int(parts[3])
+    data = await state.get_data()
+    rows: list[list[dict[str, str]]] = data.get("buttons", [])
+
+    try:
+        updated_rows = cycle_button_style(rows, row_idx, col_idx)
+    except IndexError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+
+    await state.update_data(buttons=updated_rows)
+    if callback.message:
+        await callback.message.edit_text(
+            _format_button_builder_status(
+                channel_title=data.get("channel_title", "Channel"),
+                content_type=data.get("content_type", "text"),
+                rows=updated_rows,
+            ),
+            parse_mode="HTML",
+            reply_markup=button_builder_keyboard(updated_rows),
+        )
+    await callback.answer("Color changed.")
 
 
 def _use_rich(data: dict, rows: list[list[dict[str, str]]]) -> bool:
