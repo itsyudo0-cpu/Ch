@@ -1,0 +1,6 @@
+{
+  "name": "Channel Help Bot — Telegram Publisher & Studio",
+  "description": "Python 3.11+ Telegram channel publishing bot built with aiogram 3.x and SQLite, featuring interactive post creation, URL button builder, preview, and post management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
