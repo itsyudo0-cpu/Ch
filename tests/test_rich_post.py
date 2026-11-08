@@ -60,11 +60,11 @@ class TestRichBlocks(unittest.TestCase):
         self.assertEqual(
             blocks[1]["buttons"],
             [
-                {"text": "Yes \u00b7 4", "callback_data": "v:tok:1"},
-                {"text": "Site", "url": "https://example.com"},
+                {"text": "Yes \u00b7 4", "callback_data": "v:tok:1", "style": "primary"},
+                {"text": "Site", "url": "https://example.com", "style": "primary"},
             ],
         )
-        self.assertEqual(blocks[2]["buttons"], [{"text": "No", "callback_data": "v:tok:2"}])
+        self.assertEqual(blocks[2]["buttons"], [{"text": "No", "callback_data": "v:tok:2", "style": "primary"}])
 
     def test_photo_post_has_media_block_first(self) -> None:
         rows = parse_buttons_text("Site - https://example.com")
