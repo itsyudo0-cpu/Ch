@@ -16,3 +16,11 @@ class NewPostStates(StatesGroup):
 class EditPublishedPostStates(StatesGroup):
     managing_buttons = State()
     waiting_for_buttons_input = State()
+
+
+class WelcomeStates(StatesGroup):
+    waiting_for_image = State()
+
+
+class AdminStates(StatesGroup):
+    waiting_for_mongo_url = State()

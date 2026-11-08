@@ -6,7 +6,8 @@ from aiogram.types import (
     KeyboardButton,
     ReplyKeyboardMarkup,
 )
-from bot.db import ChannelRecord, PostRecord
+from bot.db import ChannelRecord, MongoUrlRecord, PostRecord
+from bot.utils.button_parser import STYLE_EMOJI, api_style, effective_style
 
 # Main Menu Reply Keyboard labels
 BTN_NEW_POST = "📝 New Post"
@@ -14,29 +15,56 @@ BTN_MY_CHANNELS = "📢 My Channels"
 BTN_MY_POSTS = "🗂 My Posts"
 BTN_HELP = "ℹ️ Help"
 
+# Telegram colored buttons (Bot API 9.4+): primary = blue, success = green, danger = red.
+BLUE = "primary"
+GREEN = "success"
+RED = "danger"
+
+
+def _btn(
+    text: str,
+    *,
+    cb: str | None = None,
+    url: str | None = None,
+    style: str | None = None,
+) -> InlineKeyboardButton:
+    """InlineKeyboardButton with optional color. Old clients simply ignore `style`."""
+    if url is not None:
+        return InlineKeyboardButton(text=text, url=url, style=style)
+    return InlineKeyboardButton(text=text, callback_data=cb, style=style)
+
+
+def _kb(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 
 def main_menu_reply_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=BTN_NEW_POST), KeyboardButton(text=BTN_MY_CHANNELS)],
-            [KeyboardButton(text=BTN_MY_POSTS), KeyboardButton(text=BTN_HELP)],
+            [
+                KeyboardButton(text=BTN_NEW_POST, style=GREEN),
+                KeyboardButton(text=BTN_MY_CHANNELS, style=BLUE),
+            ],
+            [
+                KeyboardButton(text=BTN_MY_POSTS, style=BLUE),
+                KeyboardButton(text=BTN_HELP),
+            ],
         ],
         resize_keyboard=True,
         is_persistent=True,
+        input_field_placeholder="✨ Choose an option…",
     )
 
 
 def main_menu_inline_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    return _kb(
+        [
+            [_btn("✨ Create New Post", cb="menu:new_post", style=GREEN)],
             [
-                InlineKeyboardButton(text=BTN_NEW_POST, callback_data="menu:new_post"),
-                InlineKeyboardButton(text=BTN_MY_CHANNELS, callback_data="menu:channels"),
+                _btn(BTN_MY_CHANNELS, cb="menu:channels", style=BLUE),
+                _btn(BTN_MY_POSTS, cb="menu:my_posts", style=BLUE),
             ],
-            [
-                InlineKeyboardButton(text=BTN_MY_POSTS, callback_data="menu:my_posts"),
-                InlineKeyboardButton(text=BTN_HELP, callback_data="menu:help"),
-            ],
+            [_btn("📖 How it works", cb="menu:help")],
         ]
     )
 
@@ -47,31 +75,17 @@ def channels_list_keyboard(channels: list[ChannelRecord]) -> InlineKeyboardMarku
         handle = f" (@{ch.username})" if ch.username else ""
         rows.append(
             [
-                InlineKeyboardButton(
-                    text=f"📢 {ch.title}{handle}",
-                    callback_data=f"ch_info:{ch.channel_id}",
-                ),
-                InlineKeyboardButton(
-                    text="🗑 Disconnect",
-                    callback_data=f"ch_del:{ch.channel_id}",
-                ),
+                _btn(f"📢 {ch.title}{handle}", cb=f"ch_info:{ch.channel_id}", style=BLUE),
+                _btn("🗑", cb=f"ch_del:{ch.channel_id}", style=RED),
             ]
         )
-    rows.append(
-        [InlineKeyboardButton(text="➕ Connect Channel", callback_data="ch_add")]
-    )
-    rows.append(
-        [InlineKeyboardButton(text="⬅️ Back to Menu", callback_data="menu:home")]
-    )
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    rows.append([_btn("➕ Connect Channel", cb="ch_add", style=GREEN)])
+    rows.append([_btn("⬅️ Back to Menu", cb="menu:home")])
+    return _kb(rows)
 
 
 def cancel_keyboard(callback_data: str = "action:cancel") -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="✖️ Cancel", callback_data=callback_data)]
-        ]
-    )
+    return _kb([[_btn("✖️ Cancel", cb=callback_data, style=RED)]])
 
 
 def choose_channel_for_post_keyboard(
@@ -81,20 +95,11 @@ def choose_channel_for_post_keyboard(
     for ch in channels:
         handle = f" (@{ch.username})" if ch.username else ""
         rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"📢 {ch.title}{handle}",
-                    callback_data=f"post_ch:{ch.channel_id}",
-                )
-            ]
+            [_btn(f"📢 {ch.title}{handle}", cb=f"post_ch:{ch.channel_id}", style=BLUE)]
         )
-    rows.append(
-        [InlineKeyboardButton(text="➕ Connect New Channel", callback_data="ch_add")]
-    )
-    rows.append(
-        [InlineKeyboardButton(text="✖️ Cancel", callback_data="action:cancel")]
-    )
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    rows.append([_btn("➕ Connect New Channel", cb="ch_add", style=GREEN)])
+    rows.append([_btn("✖️ Cancel", cb="action:cancel", style=RED)])
+    return _kb(rows)
 
 
 def button_builder_keyboard(
@@ -104,63 +109,40 @@ def button_builder_keyboard(
 ) -> InlineKeyboardMarkup:
     prefix = f"pubedit:{post_id}" if is_editing_published and post_id else "draftbtn"
     kb_rows: list[list[InlineKeyboardButton]] = [
-        [
-            InlineKeyboardButton(
-                text="➕ Add Button Rows", callback_data=f"{prefix}:add"
-            ),
-        ]
+        [_btn("➕ Add Button Rows", cb=f"{prefix}:add", style=GREEN)]
     ]
 
+    # One line per button: [🎨 recolor (shows the real color)] [✖ remove]
+    for r_idx, row in enumerate(rows):
+        for c_idx, btn in enumerate(row):
+            short_label = btn["text"][:22]
+            kb_rows.append(
+                [
+                    _btn(
+                        f"{STYLE_EMOJI[effective_style(btn)]} {r_idx + 1}.{c_idx + 1} · {short_label}",
+                        cb=f"{prefix}:clr:{r_idx}:{c_idx}",
+                        style=api_style(btn),
+                    ),
+                    _btn("✖️", cb=f"{prefix}:rm:{r_idx}:{c_idx}", style=RED),
+                ]
+            )
     if rows:
-        # Individual button removal buttons
-        for r_idx, row in enumerate(rows):
-            for c_idx, btn in enumerate(row):
-                short_label = btn["text"][:20]
-                kb_rows.append(
-                    [
-                        InlineKeyboardButton(
-                            text=f"❌ Remove [{r_idx + 1}.{c_idx + 1}] {short_label}",
-                            callback_data=f"{prefix}:rm:{r_idx}:{c_idx}",
-                        )
-                    ]
-                )
-        kb_rows.append(
-            [
-                InlineKeyboardButton(
-                    text="🧹 Clear All Buttons", callback_data=f"{prefix}:clear"
-                )
-            ]
-        )
+        kb_rows.append([_btn("🧹 Clear All Buttons", cb=f"{prefix}:clear")])
 
     if is_editing_published and post_id is not None:
         kb_rows.append(
-            [
-                InlineKeyboardButton(
-                    text="💾 Save Buttons to Channel Post",
-                    callback_data=f"pubedit:{post_id}:save",
-                )
-            ]
+            [_btn("💾 Save Buttons to Channel Post", cb=f"pubedit:{post_id}:save", style=GREEN)]
         )
-        kb_rows.append(
-            [
-                InlineKeyboardButton(
-                    text="⬅️ Back to Post", callback_data=f"mypost:view:{post_id}"
-                )
-            ]
-        )
+        kb_rows.append([_btn("⬅️ Back to Post", cb=f"mypost:view:{post_id}")])
     else:
         kb_rows.append(
             [
-                InlineKeyboardButton(
-                    text="👁 Preview Post", callback_data="draftbtn:preview"
-                ),
-                InlineKeyboardButton(
-                    text="✖️ Cancel", callback_data="action:cancel"
-                ),
+                _btn("👁 Preview Post", cb="draftbtn:preview", style=BLUE),
+                _btn("✖️ Cancel", cb="action:cancel", style=RED),
             ]
         )
 
-    return InlineKeyboardMarkup(inline_keyboard=kb_rows)
+    return _kb(kb_rows)
 
 
 def preview_controls_keyboard(
@@ -168,49 +150,28 @@ def preview_controls_keyboard(
     protect_content: bool,
     pin_after_publish: bool,
     button_count: int,
-    rich_buttons: bool = True,
+    rich_buttons: bool = False,
 ) -> InlineKeyboardMarkup:
-    silent_label = f"{'✅' if silent else '⬜'} Silent Notification"
-    protect_label = f"{'✅' if protect_content else '⬜'} Protect Content"
-    pin_label = f"{'✅' if pin_after_publish else '⬜'} Pin After Publish"
-    btn_label = f"🔗 Edit Buttons ({button_count})"
-    rich_label = f"{'🟢' if rich_buttons else '⚪️'} Rich Buttons (API 10.3): {'ON' if rich_buttons else 'OFF'}"
+    def toggle(label: str, on: bool, cb: str) -> InlineKeyboardButton:
+        return _btn(f"{'✅' if on else '⬜'} {label}", cb=cb, style=GREEN if on else None)
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    return _kb(
+        [
+            [_btn("🚀 Publish Now", cb="preview:publish", style=GREEN)],
+            [_btn(f"🎨 Edit Buttons & Colors ({button_count})", cb="preview:edit_buttons", style=BLUE)],
             [
-                InlineKeyboardButton(
-                    text="🚀 Publish Now", callback_data="preview:publish"
+                toggle("Silent", silent, "preview:toggle:silent"),
+                toggle("Protect", protect_content, "preview:toggle:protect"),
+            ],
+            [toggle("Pin After Publish", pin_after_publish, "preview:toggle:pin")],
+            [
+                toggle(
+                    "Compact Rich Buttons (small pills)",
+                    rich_buttons,
+                    "preview:toggle:rich",
                 )
             ],
-            [
-                InlineKeyboardButton(
-                    text=btn_label, callback_data="preview:edit_buttons"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=silent_label, callback_data="preview:toggle:silent"
-                ),
-                InlineKeyboardButton(
-                    text=protect_label, callback_data="preview:toggle:protect"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text=pin_label, callback_data="preview:toggle:pin"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=rich_label, callback_data="preview:toggle:rich"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="✖️ Cancel", callback_data="action:cancel"
-                )
-            ],
+            [_btn("✖️ Cancel", cb="action:cancel", style=RED)],
         ]
     )
 
@@ -222,57 +183,89 @@ def my_posts_list_keyboard(posts: list[PostRecord]) -> InlineKeyboardMarkup:
         btn_count = sum(len(r) for r in post.buttons)
         rows.append(
             [
-                InlineKeyboardButton(
-                    text=f"#{post.id} [{post.channel_title[:14]}] {snippet} ({btn_count}🔗)",
-                    callback_data=f"mypost:view:{post.id}",
+                _btn(
+                    f"#{post.id} [{post.channel_title[:14]}] {snippet} ({btn_count}🔗)",
+                    cb=f"mypost:view:{post.id}",
+                    style=BLUE,
                 )
             ]
         )
-    rows.append(
-        [InlineKeyboardButton(text="⬅️ Back to Menu", callback_data="menu:home")]
-    )
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    rows.append([_btn("⬅️ Back to Menu", cb="menu:home")])
+    return _kb(rows)
 
 
 def my_post_detail_keyboard(post: PostRecord) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if post.channel_username:
         post_url = f"https://t.me/{post.channel_username}/{post.channel_message_id}"
-        rows.append(
-            [InlineKeyboardButton(text="↗️ Open in Channel", url=post_url)]
-        )
+        rows.append([_btn("↗️ Open in Channel", url=post_url, style=BLUE)])
     rows.append(
         [
-            InlineKeyboardButton(
-                text="🔗 Edit URL Buttons",
-                callback_data=f"mypost:editbtns:{post.id}",
-            ),
-            InlineKeyboardButton(
-                text="🗑 Delete from Channel",
-                callback_data=f"mypost:delconfirm:{post.id}",
-            ),
+            _btn("🎨 Edit Buttons", cb=f"mypost:editbtns:{post.id}", style=GREEN),
+            _btn("🗑 Delete", cb=f"mypost:delconfirm:{post.id}", style=RED),
         ]
     )
-    rows.append(
-        [InlineKeyboardButton(text="⬅️ Back to My Posts", callback_data="menu:my_posts")]
-    )
-    return InlineKeyboardMarkup(inline_keyboard=rows)
+    rows.append([_btn("⬅️ Back to My Posts", cb="menu:my_posts")])
+    return _kb(rows)
 
 
 def confirm_delete_post_keyboard(post_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    return _kb(
+        [
+            [_btn("⚠️ Yes, Delete from Channel", cb=f"mypost:delete:{post_id}", style=RED)],
+            [_btn("⬅️ Cancel", cb=f"mypost:view:{post_id}", style=GREEN)],
+        ]
+    )
+
+
+# ------------------------------------------------------------ admin panel
+
+
+def admin_panel_keyboard() -> InlineKeyboardMarkup:
+    return _kb(
+        [
+            [_btn("🗄 Databases", cb="admin:db", style=BLUE)],
+            [_btn("📊 DB Status", cb="admin:db:status", style=GREEN)],
+            [_btn("🖼 Welcome Image", cb="admin:welcome")],
+            [_btn("⬅️ Back to Menu", cb="menu:home")],
+        ]
+    )
+
+
+def admin_db_keyboard(urls: list[MongoUrlRecord]) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    for url in urls:
+        tag = "🔒" if url.source == "env" else "🗄"
+        rows.append(
             [
-                InlineKeyboardButton(
-                    text="⚠️ Yes, Delete Post from Channel",
-                    callback_data=f"mypost:delete:{post_id}",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⬅️ Cancel",
-                    callback_data=f"mypost:view:{post_id}",
-                )
-            ],
+                _btn(f"{tag} {url.label}", cb="admin:db:status", style=BLUE),
+                _btn("🗑 Delete", cb=f"admin:db:del:{url.id}", style=RED),
+            ]
+        )
+    rows.append([_btn("➕ Add Database URL", cb="admin:db:add", style=GREEN)])
+    rows.append(
+        [
+            _btn("📊 Status", cb="admin:db:status", style=BLUE),
+            _btn("🔄 Sync Now", cb="admin:db:sync", style=BLUE),
+        ]
+    )
+    rows.append([_btn("⬅️ Admin Panel", cb="admin:home")])
+    return _kb(rows)
+
+
+def admin_delete_confirm_keyboard(url_id: int) -> InlineKeyboardMarkup:
+    return _kb(
+        [
+            [_btn("⚠️ Yes, Delete URL", cb=f"admin:db:delok:{url_id}", style=RED)],
+            [_btn("⬅️ Cancel", cb="admin:db", style=GREEN)],
+        ]
+    )
+
+
+def admin_status_keyboard() -> InlineKeyboardMarkup:
+    return _kb(
+        [
+            [_btn("🔄 Refresh", cb="admin:db:status", style=BLUE)],
+            [_btn("🗄 Databases", cb="admin:db"), _btn("⬅️ Admin Panel", cb="admin:home")],
         ]
     )

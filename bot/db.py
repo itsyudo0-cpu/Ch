@@ -18,6 +18,25 @@ class ChannelRecord:
 
 
 @dataclass(slots=True)
+class MongoUrlRecord:
+    id: int
+    uri: str
+    label: str
+    limit_mb: int | None
+    source: str  # "panel" (added in the admin panel) or "env" (MONGO_URI variable)
+    added_at: str
+
+
+# Tables mirrored to MongoDB: table -> primary key columns.
+SYNC_TABLES: dict[str, tuple[str, ...]] = {
+    "channels": ("id",),
+    "posts": ("id",),
+    "votes": ("vote_token", "user_id"),
+    "bot_settings": ("key",),
+}
+
+
+@dataclass(slots=True)
 class PostRecord:
     id: int
     user_id: int
@@ -129,7 +148,155 @@ class Database:
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_vote_token "
                 "ON posts (vote_token) WHERE vote_token IS NOT NULL;"
             )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mongo_urls (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    uri TEXT NOT NULL UNIQUE,
+                    label TEXT NOT NULL DEFAULT '',
+                    limit_mb INTEGER,
+                    source TEXT NOT NULL DEFAULT 'panel',
+                    added_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                """
+            )
+            await db.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bot_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                """
+            )
             await db.commit()
+
+    async def get_setting(self, key: str) -> str | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT value FROM bot_settings WHERE key = ?;", (key,)
+            )
+            row = await cursor.fetchone()
+            return str(row[0]) if row else None
+
+    async def set_setting(self, key: str, value: str) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO bot_settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value;",
+                (key, value),
+            )
+            await db.commit()
+
+    async def delete_setting(self, key: str) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("DELETE FROM bot_settings WHERE key = ?;", (key,))
+            await db.commit()
+
+    # ------------------------------------------------------------ MongoDB URLs
+
+    @staticmethod
+    def _row_to_mongo_url(row: Any) -> MongoUrlRecord:
+        return MongoUrlRecord(
+            id=row["id"],
+            uri=row["uri"],
+            label=row["label"],
+            limit_mb=row["limit_mb"],
+            source=row["source"],
+            added_at=row["added_at"],
+        )
+
+    async def list_mongo_urls(self) -> list[MongoUrlRecord]:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT id, uri, label, limit_mb, source, added_at "
+                "FROM mongo_urls ORDER BY id ASC;"
+            )
+            return [self._row_to_mongo_url(r) for r in await cursor.fetchall()]
+
+    async def get_mongo_url(self, url_id: int) -> MongoUrlRecord | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT id, uri, label, limit_mb, source, added_at "
+                "FROM mongo_urls WHERE id = ?;",
+                (url_id,),
+            )
+            row = await cursor.fetchone()
+            return self._row_to_mongo_url(row) if row else None
+
+    async def add_mongo_url(
+        self,
+        uri: str,
+        limit_mb: int | None = None,
+        source: str = "panel",
+    ) -> MongoUrlRecord | None:
+        """Insert a URL. Returns None when the same URL already exists."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO mongo_urls (uri, limit_mb, source) VALUES (?, ?, ?);",
+                (uri, limit_mb, source),
+            )
+            if cursor.rowcount == 0:
+                await db.commit()
+                return None
+            url_id = int(cursor.lastrowid or 0)
+            await db.execute(
+                "UPDATE mongo_urls SET label = ? WHERE id = ?;", (f"DB {url_id}", url_id)
+            )
+            await db.commit()
+        return await self.get_mongo_url(url_id)
+
+    async def delete_mongo_url(self, url_id: int) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("DELETE FROM mongo_urls WHERE id = ?;", (url_id,))
+            await db.commit()
+            return cursor.rowcount > 0
+
+    # --------------------------------------------- snapshot (MongoDB sync)
+
+    async def is_empty(self) -> bool:
+        """True for a brand-new database (nothing worth protecting from a restore)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            for table in SYNC_TABLES:
+                cursor = await db.execute(f"SELECT 1 FROM {table} LIMIT 1;")
+                if await cursor.fetchone():
+                    return False
+        return True
+
+    async def dump_tables(self) -> dict[str, list[dict[str, Any]]]:
+        """All synced tables as plain dicts (used to build a MongoDB snapshot)."""
+        result: dict[str, list[dict[str, Any]]] = {}
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            for table in SYNC_TABLES:
+                cursor = await db.execute(f"SELECT * FROM {table};")
+                result[table] = [dict(r) for r in await cursor.fetchall()]
+        return result
+
+    async def restore_tables(self, data: dict[str, list[dict[str, Any]]]) -> dict[str, int]:
+        """Replace the synced tables with a snapshot. Returns restored row counts."""
+        counts: dict[str, int] = {}
+        async with aiosqlite.connect(self.db_path) as db:
+            for table in SYNC_TABLES:
+                cursor = await db.execute(f"PRAGMA table_info({table});")
+                columns = [row[1] for row in await cursor.fetchall()]
+                await db.execute(f"DELETE FROM {table};")
+                rows = data.get(table, [])
+                for row in rows:
+                    cols = [c for c in columns if c in row]
+                    if not cols:
+                        continue
+                    placeholders = ", ".join("?" for _ in cols)
+                    await db.execute(
+                        f"INSERT OR REPLACE INTO {table} ({', '.join(cols)}) "
+                        f"VALUES ({placeholders});",
+                        tuple(row[c] for c in cols),
+                    )
+                counts[table] = len(rows)
+            await db.commit()
+        return counts
 
     async def upsert_channel(
         self,
