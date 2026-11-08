@@ -17,6 +17,7 @@ from bot.keyboards import (
 from bot.states import EditPublishedPostStates
 from bot.utils.button_parser import (
     ButtonParseError,
+    cycle_button_style,
     has_vote_buttons,
     new_vote_token,
     format_buttons_dsl,
@@ -218,6 +219,25 @@ async def cb_pub_edit_actions(
                 ),
             )
         await callback.answer("Button removed.")
+        return
+
+    if action == "clr":
+        r_idx, c_idx = int(parts[3]), int(parts[4])
+        try:
+            rows = cycle_button_style(rows, r_idx, c_idx)
+        except IndexError as exc:
+            await callback.answer(str(exc), show_alert=True)
+            return
+        await state.update_data(edit_buttons=rows)
+        if callback.message:
+            await callback.message.edit_text(
+                _format_pub_edit_status(post, rows),
+                parse_mode="HTML",
+                reply_markup=button_builder_keyboard(
+                    rows, is_editing_published=True, post_id=post.id
+                ),
+            )
+        await callback.answer("Color changed. Tap Save to apply.")
         return
 
     if action == "save":
