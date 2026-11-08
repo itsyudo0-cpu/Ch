@@ -17,10 +17,11 @@ class ContextAndWhitelistMiddleware(BaseMiddleware):
     Injects `db` and `settings` into handler data and enforces optional user whitelist.
     """
 
-    def __init__(self, settings: Settings, db: Database) -> None:
+    def __init__(self, settings: Settings, db: Database, mongo: Any = None) -> None:
         super().__init__()
         self.settings = settings
         self.db = db
+        self.mongo = mongo
 
     async def __call__(
         self,
@@ -30,6 +31,7 @@ class ContextAndWhitelistMiddleware(BaseMiddleware):
     ) -> Any:
         data["settings"] = self.settings
         data["db"] = self.db
+        data["mongo"] = self.mongo
 
         # Channel subscribers press vote buttons: they are never on the admin whitelist.
         is_vote_press = (
