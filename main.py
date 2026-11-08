@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiohttp import web
 
 from bot.config import load_settings
 from bot.db import Database
@@ -21,6 +23,28 @@ def setup_logging(level_name: str) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
         stream=sys.stdout,
     )
+
+
+async def start_health_server(logger: logging.Logger) -> web.AppRunner:
+    """Tiny HTTP server so Render's Web Service sees an open port.
+
+    Render injects the PORT env var. The bot itself still uses long polling.
+    """
+
+    async def health(_: web.Request) -> web.Response:
+        return web.Response(text="Bot is running")
+
+    app = web.Application()
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", "10000"))
+    site = web.TCPSite(runner, host="0.0.0.0", port=port)
+    await site.start()
+    logger.info("Health server listening on 0.0.0.0:%s", port)
+    return runner
 
 
 async def main() -> None:
@@ -53,12 +77,15 @@ async def main() -> None:
         settings.whitelist_enabled,
     )
 
+    health_runner = await start_health_server(logger)
+
     try:
         await dp.start_polling(
             bot,
             allowed_updates=dp.resolve_used_update_types(),
         )
     finally:
+        await health_runner.cleanup()
         await bot.session.close()
 
 
