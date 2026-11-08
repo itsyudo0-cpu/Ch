@@ -1,0 +1,1 @@
+"""Channel Help Bot package."""
