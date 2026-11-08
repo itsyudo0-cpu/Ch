@@ -11,8 +11,9 @@ from aiohttp import web
 
 from bot.config import load_settings
 from bot.db import Database
-from bot.handlers import channels, my_posts, posts, start, votes
+from bot.handlers import admin, channels, my_posts, posts, start, votes
 from bot.middlewares.access import ContextAndWhitelistMiddleware
+from bot.mongo_sync import MongoManager
 
 
 def setup_logging(level_name: str) -> None:
@@ -56,15 +57,23 @@ async def main() -> None:
     await db.init()
     logger.info("SQLite database initialized at %s", settings.db_path)
 
+    # Optional MongoDB backup: restore into an empty SQLite file, then sync in the background.
+    mongo = MongoManager(db, settings)
+    try:
+        await mongo.bootstrap()
+    except Exception:
+        logger.exception("MongoDB bootstrap failed (continuing without restore)")
+
     bot = Bot(token=settings.bot_token)
     dp = Dispatcher(storage=MemoryStorage())
 
-    middleware = ContextAndWhitelistMiddleware(settings=settings, db=db)
+    middleware = ContextAndWhitelistMiddleware(settings=settings, db=db, mongo=mongo)
     dp.message.middleware(middleware)
     dp.callback_query.middleware(middleware)
 
     dp.include_router(votes.router)
     dp.include_router(start.router)
+    dp.include_router(admin.router)
     dp.include_router(channels.router)
     dp.include_router(posts.router)
     dp.include_router(my_posts.router)
@@ -78,6 +87,7 @@ async def main() -> None:
     )
 
     health_runner = await start_health_server(logger)
+    mongo.start()
 
     try:
         await dp.start_polling(
@@ -85,6 +95,7 @@ async def main() -> None:
             allowed_updates=dp.resolve_used_update_types(),
         )
     finally:
+        await mongo.stop()
         await health_runner.cleanup()
         await bot.session.close()
 
