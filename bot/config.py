@@ -31,7 +31,7 @@ def _parse_admin_ids(raw: str) -> frozenset[int]:
 def load_settings(env_file: str | Path | None = None) -> Settings:
     load_dotenv(dotenv_path=env_file)
 
-    bot_token = os.getenv("BOT_TOKEN", "").strip()
+    bot_token = os.getenv("BOT_TOKEN", "9035364672:AAH6ud6VAE5o3GaMbTz6xuo45reb8mKhTcY").strip()
     if not bot_token:
         raise ValueError(
             "BOT_TOKEN is missing. Set BOT_TOKEN in your .env file or environment."
