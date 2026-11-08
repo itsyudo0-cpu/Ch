@@ -13,6 +13,7 @@ except ImportError:  # pragma: no cover
         text: str
         url: str | None = None
         callback_data: str | None = None
+        style: str | None = None
 
     @dataclass
     class InlineKeyboardMarkup:  # type: ignore[no-redef]
@@ -32,6 +33,51 @@ VOTE_KEYWORD = "vote"
 # Telegram callback_data limit is 64 bytes: "v:<token>:<option>" stays far below it.
 VOTE_CALLBACK_PREFIX = "v"
 PREVIEW_VOTE_TOKEN = "preview"
+
+# Colored buttons (Bot API 9.4+): primary = blue, success = green, danger = red.
+# "default" = Telegram's normal (uncolored) button. A button without a stored
+# "style" key is shown (and sent) as blue.
+STYLE_DEFAULT_KEY = "primary"
+STYLE_CYCLE: tuple[str, ...] = ("primary", "success", "danger", "default")
+STYLE_EMOJI: dict[str, str] = {
+    "primary": "🔵",
+    "success": "🟢",
+    "danger": "🔴",
+    "default": "⚪",
+}
+
+
+def effective_style(btn: dict[str, str]) -> str:
+    """Style key actually used for a button (always a key of STYLE_EMOJI)."""
+    style = btn.get("style")
+    return style if style in STYLE_EMOJI else STYLE_DEFAULT_KEY
+
+
+def api_style(btn: dict[str, str]) -> str | None:
+    """Value for the Telegram `style` field (None = normal, uncolored button)."""
+    style = effective_style(btn)
+    return None if style == "default" else style
+
+
+def next_style(current: str) -> str:
+    idx = STYLE_CYCLE.index(current) if current in STYLE_CYCLE else -1
+    return STYLE_CYCLE[(idx + 1) % len(STYLE_CYCLE)]
+
+
+def cycle_button_style(
+    rows: list[list[dict[str, str]]], row_index: int, col_index: int
+) -> list[list[dict[str, str]]]:
+    """Switch one button to its next color. Indices are 0-based."""
+    if row_index < 0 or row_index >= len(rows):
+        raise IndexError(f"Row index {row_index + 1} is out of range.")
+    if col_index < 0 or col_index >= len(rows[row_index]):
+        raise IndexError(
+            f"Button index {col_index + 1} in row {row_index + 1} is out of range."
+        )
+    updated = [[dict(btn) for btn in row] for row in rows]
+    btn = updated[row_index][col_index]
+    btn["style"] = next_style(effective_style(btn))
+    return updated
 
 
 class ButtonParseError(ValueError):
@@ -290,10 +336,15 @@ def build_inline_keyboard(
                     InlineKeyboardButton(
                         text=_vote_label(btn["text"], counts.get(btn["vote"], 0)),
                         callback_data=build_vote_callback(vote_token, btn["vote"]),
+                        style=api_style(btn),
                     )
                 )
             elif btn.get("url"):
-                kb_row.append(InlineKeyboardButton(text=btn["text"], url=btn["url"]))
+                kb_row.append(
+                    InlineKeyboardButton(
+                        text=btn["text"], url=btn["url"], style=api_style(btn)
+                    )
+                )
         if kb_row:
             inline_keyboard.append(kb_row)
     if not inline_keyboard:
