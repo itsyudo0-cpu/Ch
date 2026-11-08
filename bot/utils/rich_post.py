@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from bot.utils.button_parser import (
+    api_style,
     build_vote_callback,
     is_vote_button,
     _vote_label,
@@ -185,13 +186,18 @@ def rich_button_for(
         if not vote_token:
             return None
         count = (vote_counts or {}).get(btn["vote"], 0)
-        return {
+        out: dict[str, Any] = {
             "text": _vote_label(btn["text"], count),
             "callback_data": build_vote_callback(vote_token, btn["vote"]),
         }
-    if btn.get("url"):
-        return {"text": btn["text"], "url": btn["url"]}
-    return None
+    elif btn.get("url"):
+        out = {"text": btn["text"], "url": btn["url"]}
+    else:
+        return None
+    style = api_style(btn)
+    if style:
+        out["style"] = style
+    return out
 
 
 def build_rich_blocks(
