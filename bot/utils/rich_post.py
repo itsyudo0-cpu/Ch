@@ -10,6 +10,8 @@ Everything here is pure data conversion (no network), so it is unit-tested.
 
 from __future__ import annotations
 
+import os
+import unicodedata
 from typing import Any
 
 from bot.utils.button_parser import (
@@ -20,6 +22,15 @@ from bot.utils.button_parser import (
 )
 
 RICH_BUTTON_ALIGN = "center"
+# Rich buttons cannot be stretched by the API (only left/center/right), so labels are
+# padded with invisible Braille-blank characters to make the pills wide.
+# RICH_ROW_WIDTH = total label width of one row (0 = no padding). Raise it for wider pills.
+try:
+    RICH_ROW_WIDTH = int(os.getenv("RICH_ROW_WIDTH", "34"))
+except ValueError:
+    RICH_ROW_WIDTH = 34
+_PAD_CHAR = "\u2800"
+MAX_RICH_BUTTON_TEXT = 64
 MAX_RICH_TEXT_CHARS = 32768
 
 # content_type -> (block type, field name, InputMedia type)
@@ -200,11 +211,32 @@ def rich_button_for(
     return out
 
 
+def _visual_len(text: str) -> int:
+    total = 0
+    for ch in text:
+        wide = unicodedata.east_asian_width(ch) in {"W", "F"} or ord(ch) >= 0x1F000
+        total += 2 if wide else 1
+    return total
+
+
+def pad_button_text(text: str, target: int) -> str:
+    """Center `text` in invisible padding so the button looks wide."""
+    missing = target - _visual_len(text)
+    if target <= 0 or missing <= 1:
+        return text
+    left = missing // 2
+    right = missing - left
+    left = min(left, max(0, (MAX_RICH_BUTTON_TEXT - len(text)) // 2))
+    right = min(right, max(0, MAX_RICH_BUTTON_TEXT - len(text) - left))
+    return f"{_PAD_CHAR * left}{text}{_PAD_CHAR * right}"
+
+
 def build_rich_blocks(
     content: dict[str, Any],
     rows: list[list[dict[str, str]]],
     vote_token: str | None = None,
     vote_counts: dict[str, int] | None = None,
+    row_width: int = 0,
 ) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = []
 
@@ -230,6 +262,10 @@ def build_rich_blocks(
             for b in (rich_button_for(btn, vote_token, vote_counts) for btn in row)
             if b is not None
         ]
+        if buttons and row_width > 0:
+            per_button = row_width // len(buttons)
+            for b in buttons:
+                b["text"] = pad_button_text(b["text"], per_button)
         if buttons:
             blocks.append(
                 {"type": "buttons", "buttons": buttons[:8], "align": RICH_BUTTON_ALIGN}
@@ -244,4 +280,8 @@ def build_rich_message(
     vote_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """InputRichMessage (blocks mode) for a channel post."""
-    return {"blocks": build_rich_blocks(content, rows, vote_token, vote_counts)}
+    return {
+        "blocks": build_rich_blocks(
+            content, rows, vote_token, vote_counts, row_width=RICH_ROW_WIDTH
+        )
+    }
