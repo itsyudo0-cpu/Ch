@@ -8,6 +8,7 @@ from aiogram.types import (
 )
 from bot.db import ChannelRecord, MongoUrlRecord, PostRecord
 from bot.utils.button_parser import STYLE_EMOJI, api_style, effective_style
+from bot.utils.extras import MENU_LINKS
 
 # Main Menu Reply Keyboard labels
 BTN_NEW_POST = "📝 New Post"
@@ -57,16 +58,53 @@ def main_menu_reply_keyboard() -> ReplyKeyboardMarkup:
 
 
 def main_menu_inline_keyboard() -> InlineKeyboardMarkup:
-    return _kb(
-        [
-            [_btn("✨ Create New Post", cb="menu:new_post", style=GREEN)],
-            [
-                _btn(BTN_MY_CHANNELS, cb="menu:channels", style=BLUE),
-                _btn(BTN_MY_POSTS, cb="menu:my_posts", style=BLUE),
-            ],
-            [_btn("📖 How it works", cb="menu:help")],
-        ]
+    guide = (
+        _btn("📖 Guide", url=MENU_LINKS["guide"], style=BLUE)
+        if MENU_LINKS.get("guide")
+        else _btn("📖 Guide", cb="menu:help", style=BLUE)
     )
+    rows = [
+        [_btn("➕ Add Channel", cb="ch_add", style=GREEN)],
+        [
+            _btn("✉️ Create Post", cb="menu:new_post", style=GREEN),
+            _btn("✍️ My Posts", cb="menu:my_posts", style=BLUE),
+        ],
+        [
+            _btn("📚 Multipost", cb="menu:multipost", style=BLUE),
+            _btn("🤖 Auto-complete", cb="menu:auto", style=BLUE),
+        ],
+        [
+            _btn("👋 Welcome", cb="menu:tool:w", style=BLUE),
+            _btn("🏃 Goodbye", cb="menu:tool:g", style=BLUE),
+        ],
+        [
+            _btn("🛡 Join Filters", cb="menu:tool:j", style=BLUE),
+            _btn("🧾 Event Log", cb="menu:events", style=BLUE),
+        ],
+        [_btn("📢 My Channels", cb="menu:channels", style=BLUE), _btn("⚙️ Settings", cb="admin:home")],
+    ]
+    last = [guide]
+    if MENU_LINKS.get("support"):
+        last.append(_btn("🆘 Support", url=MENU_LINKS["support"], style=BLUE))
+    rows.append(last)
+    return _kb(rows)
+
+
+def auto_channels_keyboard(
+    channels: list[ChannelRecord], enabled: set[int]
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            _btn(
+                f"{'🟢 ON' if ch.channel_id in enabled else '⚪ OFF'} · {ch.title[:28]}",
+                cb=f"auto:{ch.channel_id}",
+                style=GREEN if ch.channel_id in enabled else None,
+            )
+        ]
+        for ch in channels
+    ]
+    rows.append([_btn("⬅️ Back to Menu", cb="menu:home")])
+    return _kb(rows)
 
 
 def channels_list_keyboard(channels: list[ChannelRecord]) -> InlineKeyboardMarkup:
@@ -245,6 +283,11 @@ def admin_panel_keyboard() -> InlineKeyboardMarkup:
             [_btn("🗄 Databases", cb="admin:db", style=BLUE)],
             [_btn("📊 DB Status", cb="admin:db:status", style=GREEN)],
             [_btn("🖼 Welcome Image", cb="admin:welcome")],
+            [
+                _btn("📖 Guide Link", cb="admin:link:guide", style=GREEN),
+                _btn("🆘 Support Link", cb="admin:link:support", style=GREEN),
+            ],
+            [_btn("📣 Broadcast", cb="admin:broadcast", style=BLUE)],
             [_btn("⬅️ Back to Menu", cb="menu:home")],
         ]
     )
