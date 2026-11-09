@@ -11,7 +11,8 @@ from aiohttp import web
 
 from bot.config import load_settings
 from bot.db import Database
-from bot.handlers import admin, channels, my_posts, posts, start, votes
+from bot.handlers import admin, channel_tools, channels, extras, my_posts, posts, start, votes
+from bot.utils.extras import load_menu_links
 from bot.middlewares.access import ContextAndWhitelistMiddleware
 from bot.mongo_sync import MongoManager
 
@@ -65,7 +66,8 @@ async def main() -> None:
         logger.exception("MongoDB bootstrap failed (continuing without restore)")
 
     bot = Bot(token=settings.bot_token)
-    dp = Dispatcher(storage=MemoryStorage())
+    await load_menu_links(db)
+    dp = Dispatcher(storage=MemoryStorage(), db=db)
 
     middleware = ContextAndWhitelistMiddleware(settings=settings, db=db, mongo=mongo)
     dp.message.middleware(middleware)
@@ -77,6 +79,8 @@ async def main() -> None:
     dp.include_router(channels.router)
     dp.include_router(posts.router)
     dp.include_router(my_posts.router)
+    dp.include_router(extras.router)
+    dp.include_router(channel_tools.router)
 
     bot_info = await bot.get_me()
     logger.info(
