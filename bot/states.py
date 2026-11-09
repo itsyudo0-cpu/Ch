@@ -24,3 +24,7 @@ class WelcomeStates(StatesGroup):
 
 class AdminStates(StatesGroup):
     waiting_for_mongo_url = State()
+
+
+class ChannelTemplateStates(StatesGroup):
+    waiting_for_template = State()

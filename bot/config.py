@@ -14,7 +14,7 @@ class Settings:
     db_path: Path
     log_level: str
     vote_ephemeral_card: bool = False
-    use_rich_buttons: bool = True
+    use_rich_buttons: bool = False
     mongo_uris: tuple[str, ...] = ()
     mongo_db_name: str = "channel_help_bot"
     mongo_sync_interval: int = 120
@@ -59,7 +59,7 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
     vote_ephemeral_raw = os.getenv("VOTE_EPHEMERAL_CARD", "false").strip().lower()
     vote_ephemeral_card = vote_ephemeral_raw in {"1", "true", "yes", "on"}
 
-    rich_raw = os.getenv("RICH_BUTTONS", "true").strip().lower()
+    rich_raw = os.getenv("RICH_BUTTONS", "false").strip().lower()
     use_rich_buttons = rich_raw in {"1", "true", "yes", "on"}
 
     # MongoDB (optional): MONGO_URI may hold one or several URLs (comma / space separated).

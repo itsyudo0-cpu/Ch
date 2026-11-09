@@ -76,6 +76,7 @@ def channels_list_keyboard(channels: list[ChannelRecord]) -> InlineKeyboardMarku
         rows.append(
             [
                 _btn(f"📢 {ch.title}{handle}", cb=f"ch_info:{ch.channel_id}", style=BLUE),
+                _btn("🎨", cb=f"ch_tpl:{ch.channel_id}", style=GREEN),
                 _btn("🗑", cb=f"ch_del:{ch.channel_id}", style=RED),
             ]
         )
@@ -90,12 +91,28 @@ def cancel_keyboard(callback_data: str = "action:cancel") -> InlineKeyboardMarku
 
 def choose_channel_for_post_keyboard(
     channels: list[ChannelRecord],
+    selected: set[int] | None = None,
 ) -> InlineKeyboardMarkup:
+    selected = selected or set()
     rows: list[list[InlineKeyboardButton]] = []
     for ch in channels:
         handle = f" (@{ch.username})" if ch.username else ""
+        on = ch.channel_id in selected
         rows.append(
-            [_btn(f"📢 {ch.title}{handle}", cb=f"post_ch:{ch.channel_id}", style=BLUE)]
+            [
+                _btn(
+                    f"{'✅' if on else '⬜'} {ch.title}{handle}",
+                    cb=f"post_ch:{ch.channel_id}",
+                    style=GREEN if on else BLUE,
+                )
+            ]
+        )
+    if channels:
+        rows.append(
+            [
+                _btn("☑️ Select / Clear All", cb="post_chall", style=BLUE),
+                _btn(f"➡️ Continue ({len(selected)})", cb="post_chgo", style=GREEN),
+            ]
         )
     rows.append([_btn("➕ Connect New Channel", cb="ch_add", style=GREEN)])
     rows.append([_btn("✖️ Cancel", cb="action:cancel", style=RED)])
@@ -135,6 +152,7 @@ def button_builder_keyboard(
         )
         kb_rows.append([_btn("⬅️ Back to Post", cb=f"mypost:view:{post_id}")])
     else:
+        kb_rows.append([_btn("🚀 Publish Now", cb="draftbtn:publish", style=GREEN)])
         kb_rows.append(
             [
                 _btn("👁 Preview Post", cb="draftbtn:preview", style=BLUE),
