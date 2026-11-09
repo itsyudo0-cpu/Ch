@@ -16,6 +16,7 @@ from bot.keyboards import (
     main_menu_inline_keyboard,
 )
 from bot.states import WelcomeStates
+from bot.utils.extras import register_user
 
 logger = logging.getLogger(__name__)
 router = Router(name="start_router")
@@ -26,19 +27,21 @@ WELCOME_CAPTION_KEY = "welcome_caption_html"
 MAX_CAPTION_LEN = 1024
 
 WELCOME_TEXT = (
-    "✨ <b>Welcome to Channel Help Bot</b> ✨\n"
-    f"{DIVIDER}\n\n"
-    "Craft <b>premium channel posts</b> with <b>colorful buttons</b> 🟢🔵🔴 — "
-    "preview them perfectly and publish in one tap.\n\n"
-    "🎨  Green · Blue · Red buttons\n"
-    "📐  Full-width, perfectly aligned layout\n"
-    "🗳  Live vote counters\n"
-    "🗂  Edit or delete posts anytime\n\n"
-    "<i>Choose an option below 👇</i>"
+    "💎 <b>RICH BUTTONS BOT</b> 💎\n"
+    f"{DIVIDER}\n"
+    "<i>Premium channel posts. Colorful buttons. One tap.</i>\n\n"
+    "<blockquote>"
+    "🟢 <b>Green</b>  ·  🔵 <b>Blue</b>  ·  🔴 <b>Red</b> buttons\n"
+    "📚 Post to many channels at once\n"
+    "🤖 Auto-add buttons to every new post\n"
+    "🗳 Live vote counters\n"
+    "✍️ Edit or delete posts anytime"
+    "</blockquote>\n\n"
+    "👇 <b>Choose an option to begin</b>"
 )
 
 HELP_TEXT = (
-    "📖 <b>How to Use Channel Help Bot</b>\n"
+    "📖 <b>How to Use Rich Buttons Bot</b>\n"
     f"{DIVIDER}\n\n"
     "1️⃣ <b>Connect a channel</b>\n"
     "Add this bot as <b>Administrator</b> with <i>Post Messages</i> and "
@@ -97,9 +100,11 @@ async def _send_welcome(message: Message, db: Database) -> None:
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext, db: Database) -> None:
     await state.clear()
+    if message.from_user:
+        await register_user(db, message.from_user.id)
     await _send_welcome(message, db)
     await message.answer(
-        "🧭 <b>Dashboard</b>\nWhat would you like to do?",
+        "🧭 <b>Dashboard</b>\n<i>Pick what you want to do:</i>",
         parse_mode="HTML",
         reply_markup=main_menu_inline_keyboard(),
     )
@@ -202,7 +207,7 @@ async def cb_menu_home(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     if callback.message:
         await callback.message.edit_text(
-            "🧭 <b>Dashboard</b>\nWhat would you like to do?",
+            "🧭 <b>Dashboard</b>\n<i>Pick what you want to do:</i>",
             parse_mode="HTML",
             reply_markup=main_menu_inline_keyboard(),
         )

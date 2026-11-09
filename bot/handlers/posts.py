@@ -34,6 +34,7 @@ from bot.utils.button_parser import (
     parse_buttons_text,
     remove_button_by_position,
 )
+from bot.utils.extras import log_event
 from bot.utils.telegram_helpers import (
     call_with_retry_after,
     extract_post_metadata,
@@ -87,7 +88,7 @@ async def _start_new_post_flow(
     await state.set_state(NewPostStates.choosing_channel)
     await send_or_edit_func(
         "📝 <b>New Post — Step 1 of 3</b>\n\n"
-        "Select the channel you want to publish to:",
+        "Select one or more channels (tap to select / unselect), then press <b>Continue</b>:",
         parse_mode="HTML",
         reply_markup=choose_channel_for_post_keyboard(channels),
     )
@@ -618,6 +619,7 @@ async def _publish_one(
         vote_token=vote_token,
         rich_content=data.get("rich_content") if use_rich else None,
     )
+    await log_event(db, user_id, f"Published to {verify.title}")
     link = (
         f" · <a href='https://t.me/{verify.username}/{channel_message_id}'>view</a>"
         if verify.username

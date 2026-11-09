@@ -47,7 +47,10 @@ def _panel_text() -> str:
         f"{DIVIDER}\n\n"
         "🗄 <b>Databases</b> — add or delete MongoDB URLs (automatic backup)\n"
         "📊 <b>DB Status</b> — storage used / free of every database\n"
-        "🖼 <b>Welcome Image</b> — change the /start picture"
+        "🖼 <b>Welcome Image</b> — change the /start picture\n"
+        "📖 <b>Guide Link</b> — Telegraph guide opened by the Guide button\n"
+        "🆘 <b>Support Link</b> — support chat shown in the menu\n"
+        "📣 <b>Broadcast</b> — send a message to every bot user"
     )
 
 
