@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import secrets
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -80,6 +81,30 @@ def cycle_button_style(
     return updated
 
 
+# Color tags typed by the admin: "#g Text - url" (prefix) or "Text - url #g" (suffix).
+COLOR_TAGS: dict[str, str] = {
+    "g": "success",  # green
+    "b": "primary",  # blue
+    "r": "danger",  # red
+    "n": "default",  # plain / uncolored
+}
+STYLE_TAG: dict[str, str] = {v: k for k, v in COLOR_TAGS.items()}
+_TAG_PREFIX_RE = re.compile(r"^#([gbrn])(?=\s)", re.IGNORECASE)
+_TAG_SUFFIX_RE = re.compile(r"(?<=\s)#([gbrn])$", re.IGNORECASE)
+
+
+def extract_color_tag(segment: str) -> tuple[str, str | None]:
+    """Strip a #g/#b/#r/#n tag from a button segment -> (clean_segment, style or None)."""
+    seg = segment.strip()
+    match = _TAG_PREFIX_RE.match(seg)
+    if match:
+        return seg[match.end() :].strip(), COLOR_TAGS[match.group(1).lower()]
+    match = _TAG_SUFFIX_RE.search(seg)
+    if match:
+        return seg[: match.start()].strip(), COLOR_TAGS[match.group(1).lower()]
+    return seg, None
+
+
 class ButtonParseError(ValueError):
     """Raised when button definition text fails syntax, URL, or limit validation."""
 
@@ -89,11 +114,17 @@ class ParsedButton:
     text: str
     url: str = ""
     vote: str = ""
+    style: str = ""
 
     def to_dict(self) -> dict[str, str]:
-        if self.vote:
-            return {"text": self.text, "vote": self.vote}
-        return {"text": self.text, "url": self.url}
+        out = (
+            {"text": self.text, "vote": self.vote}
+            if self.vote
+            else {"text": self.text, "url": self.url}
+        )
+        if self.style:
+            out["style"] = self.style
+        return out
 
 
 def is_vote_button(btn: dict[str, str]) -> bool:
@@ -206,6 +237,7 @@ def parse_buttons_text(
 
         row_buttons: list[dict[str, str]] = []
         for btn_idx, segment in enumerate(segments, start=1):
+            segment, tag_style = extract_color_tag(segment)
             if " - " not in segment:
                 raise ButtonParseError(
                     f"Line {line_idx}, button {btn_idx} ('{segment}'): "
@@ -237,11 +269,15 @@ def parse_buttons_text(
             if is_vote:
                 vote_id = next_vote_id(base_rows + new_rows + [row_buttons])
                 row_buttons.append(
-                    ParsedButton(text=btn_text, vote=str(vote_id)).to_dict()
+                    ParsedButton(
+                        text=btn_text, vote=str(vote_id), style=tag_style or ""
+                    ).to_dict()
                 )
             else:
                 row_buttons.append(
-                    ParsedButton(text=btn_text, url=validated_url).to_dict()
+                    ParsedButton(
+                        text=btn_text, url=validated_url, style=tag_style or ""
+                    ).to_dict()
                 )
 
         new_rows.append(row_buttons)
@@ -292,12 +328,13 @@ def format_buttons_dsl(rows: list[list[dict[str, str]]]) -> str:
         return ""
     lines: list[str] = []
     for row in rows:
-        lines.append(
-            " | ".join(
-                f"{btn['text']} - {VOTE_KEYWORD if is_vote_button(btn) else btn['url']}"
-                for btn in row
-            )
-        )
+        parts: list[str] = []
+        for btn in row:
+            style = effective_style(btn)
+            tag = f"#{STYLE_TAG[style]} " if style != STYLE_DEFAULT_KEY else ""
+            target = VOTE_KEYWORD if is_vote_button(btn) else btn["url"]
+            parts.append(f"{tag}{btn['text']} - {target}")
+        lines.append(" | ".join(parts))
     return "\n".join(lines)
 
 
