@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 from aiogram import Bot, F, Router
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
@@ -23,6 +24,10 @@ from bot.utils.button_parser import (
     PREVIEW_VOTE_TOKEN,
     build_inline_keyboard,
     cycle_button_style,
+    fill_template,
+    parse_links,
+    parse_template,
+    template_setting_key,
     has_vote_buttons,
     new_vote_token,
     format_buttons_dsl,
@@ -116,22 +121,66 @@ async def cb_new_post(
 
 @router.callback_query(NewPostStates.choosing_channel, F.data.startswith("post_ch:"))
 async def cb_select_channel_for_post(
+    callback: CallbackQuery, state: FSMContext, db: Database
+) -> None:
+    channel_id = int(callback.data.split(":", 1)[1])  # type: ignore[union-attr]
+    selected: list[int] = list((await state.get_data()).get("channel_ids", []))
+    if channel_id in selected:
+        selected.remove(channel_id)
+    else:
+        selected.append(channel_id)
+    await _refresh_channel_picker(callback, state, db, selected)
+
+
+@router.callback_query(NewPostStates.choosing_channel, F.data == "post_chall")
+async def cb_select_all_channels(
+    callback: CallbackQuery, state: FSMContext, db: Database
+) -> None:
+    channels = await db.list_channels(callback.from_user.id)
+    current = list((await state.get_data()).get("channel_ids", []))
+    all_ids = [c.channel_id for c in channels]
+    await _refresh_channel_picker(
+        callback, state, db, [] if len(current) == len(all_ids) else all_ids
+    )
+
+
+async def _refresh_channel_picker(
+    callback: CallbackQuery, state: FSMContext, db: Database, selected: list[int]
+) -> None:
+    await state.update_data(channel_ids=selected)
+    channels = await db.list_channels(callback.from_user.id)
+    if callback.message:
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=choose_channel_for_post_keyboard(channels, set(selected))
+            )
+        except Exception:  # "message is not modified"
+            pass
+    await callback.answer()
+
+
+@router.callback_query(NewPostStates.choosing_channel, F.data == "post_chgo")
+async def cb_channels_continue(
     callback: CallbackQuery,
     state: FSMContext,
     db: Database,
     settings: Settings,
 ) -> None:
-    channel_id = int(callback.data.split(":", 1)[1])  # type: ignore[union-attr]
-    channel = await db.get_channel(callback.from_user.id, channel_id)
-    if not channel:
-        await callback.answer("Channel not found.", show_alert=True)
+    selected: list[int] = list((await state.get_data()).get("channel_ids", []))
+    channels = {c.channel_id: c for c in await db.list_channels(callback.from_user.id)}
+    chosen = [channels[i] for i in selected if i in channels]
+    if not chosen:
+        await callback.answer("Select at least one channel.", show_alert=True)
         return
 
+    title = ", ".join(c.title for c in chosen)
     await state.update_data(
-        channel_id=channel.channel_id,
-        channel_title=channel.title,
-        channel_username=channel.username,
+        channel_ids=[c.channel_id for c in chosen],
+        channel_id=chosen[0].channel_id,
+        channel_title=title,
+        channel_username=chosen[0].username,
         buttons=[],
+        rows_by_channel={},
         silent=False,
         protect_content=False,
         pin_after_publish=False,
@@ -141,7 +190,7 @@ async def cb_select_channel_for_post(
 
     if callback.message:
         await callback.message.edit_text(
-            f"📝 <b>New Post for {html.escape(channel.title)} — Step 2 of 3</b>\n\n"
+            f"📝 <b>New Post for {html.escape(title)} — Step 2 of 3</b>\n\n"
             "Send the post content now. Supported formats:\n"
             "• Text message (all formatting entities preserved)\n"
             "• Photo, Video, Document, or GIF (Animation) with caption\n"
@@ -229,16 +278,38 @@ async def cb_draft_back_to_builder(
 @router.message(NewPostStates.managing_buttons, F.text)
 @router.message(NewPostStates.waiting_for_buttons_input, F.text)
 async def msg_draft_parse_buttons(
-    message: Message, state: FSMContext
+    message: Message, state: FSMContext, db: Database
 ) -> None:
     data = await state.get_data()
     existing_rows: list[list[dict[str, str]]] = data.get("buttons", [])
+    by_channel: dict[str, list] = {}
 
     try:
-        updated_rows = parse_buttons_text(
-            raw_text=message.text or "",
-            existing_rows=existing_rows,
-        )
+        links = parse_links(message.text or "")
+        if links is not None:
+            # Links only -> fill each channel's saved button format.
+            ids = data.get("channel_ids") or [data["channel_id"]]
+            has_format = False
+            for cid in ids:
+                raw = await db.get_setting(
+                    template_setting_key(message.from_user.id, cid)  # type: ignore[union-attr]
+                )
+                if raw:
+                    has_format = True
+                    by_channel[str(cid)] = fill_template(parse_template(raw), links)
+                else:
+                    by_channel[str(cid)] = existing_rows
+            if not has_format:
+                raise ButtonParseError(
+                    "No button format saved for the selected channel(s). Set one in "
+                    "📢 My Channels → 🎨, or send full buttons: Text - https://url"
+                )
+            updated_rows = by_channel[str(ids[0])]
+        else:
+            updated_rows = parse_buttons_text(
+                raw_text=message.text or "",
+                existing_rows=existing_rows,
+            )
     except ButtonParseError as exc:
         await message.answer(
             f"❌ <b>Invalid button format:</b>\n{html.escape(str(exc))}\n\n"
@@ -248,7 +319,7 @@ async def msg_draft_parse_buttons(
         )
         return
 
-    await state.update_data(buttons=updated_rows)
+    await state.update_data(buttons=updated_rows, rows_by_channel=by_channel)
     await state.set_state(NewPostStates.managing_buttons)
     await message.answer(
         _format_button_builder_status(
@@ -265,7 +336,7 @@ async def msg_draft_parse_buttons(
 async def cb_draft_clear_buttons(
     callback: CallbackQuery, state: FSMContext
 ) -> None:
-    await state.update_data(buttons=[])
+    await state.update_data(buttons=[], rows_by_channel={})
     data = await state.get_data()
     if callback.message:
         await callback.message.edit_text(
@@ -297,7 +368,7 @@ async def cb_draft_remove_single_button(
         await callback.answer(str(exc), show_alert=True)
         return
 
-    await state.update_data(buttons=updated_rows)
+    await state.update_data(buttons=updated_rows, rows_by_channel={})
     if callback.message:
         await callback.message.edit_text(
             _format_button_builder_status(
@@ -326,7 +397,7 @@ async def cb_draft_recolor_button(callback: CallbackQuery, state: FSMContext) ->
         await callback.answer(str(exc), show_alert=True)
         return
 
-    await state.update_data(buttons=updated_rows)
+    await state.update_data(buttons=updated_rows, rows_by_channel={})
     if callback.message:
         await callback.message.edit_text(
             _format_button_builder_status(
@@ -472,39 +543,25 @@ async def cb_preview_back_to_edit_buttons(
     await callback.answer()
 
 
-@router.callback_query(NewPostStates.previewing, F.data == "preview:publish")
-async def cb_publish_post(
-    callback: CallbackQuery,
-    state: FSMContext,
+async def _publish_one(
     bot: Bot,
     db: Database,
-) -> None:
-    data = await state.get_data()
-    channel_id: int = data["channel_id"]
-    rows: list[list[dict[str, str]]] = data.get("buttons", [])
-    silent = bool(data.get("silent", False))
-    protect_content = bool(data.get("protect_content", False))
-    pin_after_publish = bool(data.get("pin_after_publish", False))
-
-    # Re-verify permissions right before publishing
+    user_id: int,
+    data: dict,
+    channel_id: int,
+    rows: list[list[dict[str, str]]],
+    silent: bool,
+    protect_content: bool,
+    pin_after_publish: bool,
+) -> tuple[bool, str]:
     verify = await verify_channel_and_permissions(
-        bot=bot,
-        target_chat_id_or_username=channel_id,
-        user_id=callback.from_user.id,
+        bot=bot, target_chat_id_or_username=channel_id, user_id=user_id
     )
     if not verify.ok:
-        if callback.message:
-            await callback.message.edit_text(
-                f"❌ <b>Cannot publish to channel:</b>\n{html.escape(verify.error_message)}",
-                parse_mode="HTML",
-                reply_markup=main_menu_inline_keyboard(),
-            )
-        await callback.answer("Permission check failed", show_alert=True)
-        return
+        return False, f"❌ <b>{channel_id}</b>: {html.escape(verify.error_message)}"
 
     vote_token = new_vote_token() if has_vote_buttons(rows) else None
     use_rich = _use_rich(data, rows)
-
     try:
         if use_rich:
             channel_message_id = await call_with_retry_after(
@@ -527,30 +584,10 @@ async def cb_publish_post(
             )
             channel_message_id = copied.message_id
     except Exception as exc:
-        if callback.message:
-            await callback.message.edit_text(
-                f"❌ <b>Publishing failed:</b>\n{html.escape(format_telegram_error(exc))}"
-                + (
-                    "\n\n💡 Rich Buttons need Bot API 10.3. Turn <b>Rich Buttons: OFF</b> "
-                    "in the preview screen to use normal inline buttons."
-                    if use_rich
-                    else ""
-                ),
-                parse_mode="HTML",
-                reply_markup=(
-                    preview_controls_keyboard(
-                        silent=silent,
-                        protect_content=protect_content,
-                        pin_after_publish=pin_after_publish,
-                        button_count=sum(len(r) for r in rows),
-                        rich_buttons=True,
-                    )
-                    if use_rich
-                    else main_menu_inline_keyboard()
-                ),
-            )
-        await callback.answer("Publish failed", show_alert=True)
-        return
+        return False, (
+            f"❌ <b>{html.escape(verify.title)}</b>: "
+            f"{html.escape(format_telegram_error(exc))}"
+        )
 
     pin_warning = ""
     if pin_after_publish:
@@ -562,13 +599,10 @@ async def cb_publish_post(
                 disable_notification=silent,
             )
         except Exception as exc:
-            pin_warning = (
-                f"\n\n⚠️ <i>Note: Post was published, but pinning failed: "
-                f"{html.escape(format_telegram_error(exc))}</i>"
-            )
+            pin_warning = f" (pin failed: {html.escape(format_telegram_error(exc))})"
 
     post_id = await db.create_post(
-        user_id=callback.from_user.id,
+        user_id=user_id,
         channel_id=channel_id,
         channel_title=verify.title,
         channel_username=verify.username,
@@ -584,19 +618,79 @@ async def cb_publish_post(
         vote_token=vote_token,
         rich_content=data.get("rich_content") if use_rich else None,
     )
+    link = (
+        f" · <a href='https://t.me/{verify.username}/{channel_message_id}'>view</a>"
+        if verify.username
+        else ""
+    )
+    return True, f"✅ <b>{html.escape(verify.title)}</b> — post #{post_id}{link}{pin_warning}"
 
-    await state.clear()
-    link_line = ""
-    if verify.username:
-        link_line = f"\n🔗 <a href='https://t.me/{verify.username}/{channel_message_id}'>View Published Post in @{verify.username}</a>"
 
+@router.callback_query(
+    StateFilter(NewPostStates.previewing, NewPostStates.managing_buttons),
+    F.data.in_({"preview:publish", "draftbtn:publish"}),
+)
+async def cb_publish_post(
+    callback: CallbackQuery,
+    state: FSMContext,
+    bot: Bot,
+    db: Database,
+) -> None:
+    data = await state.get_data()
+    if "source_message_id" not in data:
+        await callback.answer("Nothing to publish.", show_alert=True)
+        return
+    channel_ids: list[int] = data.get("channel_ids") or [data["channel_id"]]
+    default_rows: list[list[dict[str, str]]] = data.get("buttons", [])
+    by_channel: dict = data.get("rows_by_channel") or {}
+    silent = bool(data.get("silent", False))
+    protect_content = bool(data.get("protect_content", False))
+    pin_after_publish = bool(data.get("pin_after_publish", False))
+
+    await callback.answer("Publishing…")
     if callback.message:
         await callback.message.edit_text(
-            f"✅ <b>Post #{post_id} Published Successfully!</b>\n\n"
-            f"Channel: <b>{html.escape(verify.title)}</b>\n"
-            f"Channel Message ID: <code>{channel_message_id}</code>"
-            f"{link_line}{pin_warning}",
-            parse_mode="HTML",
-            reply_markup=main_menu_inline_keyboard(),
+            f"⏳ Publishing to {len(channel_ids)} channel(s)…", parse_mode="HTML"
         )
-    await callback.answer("Published!")
+
+    results: list[tuple[bool, str]] = []
+    for cid in channel_ids:
+        results.append(
+            await _publish_one(
+                bot,
+                db,
+                callback.from_user.id,
+                data,
+                cid,
+                by_channel.get(str(cid), default_rows),
+                silent,
+                protect_content,
+                pin_after_publish,
+            )
+        )
+
+    ok_count = sum(1 for ok, _ in results if ok)
+    summary = "\n".join(line for _, line in results)
+    if ok_count == 0:
+        await state.set_state(NewPostStates.previewing)
+        text = f"❌ <b>Publishing failed</b>\n\n{summary}"
+        if data.get("rich_buttons") and data.get("rich_content") and default_rows:
+            text += "\n\n💡 Try <b>Rich Buttons: OFF</b> in the preview."
+        markup = preview_controls_keyboard(
+            silent=silent,
+            protect_content=protect_content,
+            pin_after_publish=pin_after_publish,
+            button_count=sum(len(r) for r in default_rows),
+            rich_buttons=bool(data.get("rich_buttons", False)),
+        )
+    else:
+        await state.clear()
+        text = f"🚀 <b>Published to {ok_count}/{len(results)} channel(s)</b>\n\n{summary}"
+        markup = main_menu_inline_keyboard()
+    if callback.message:
+        await callback.message.edit_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=markup,
+            disable_web_page_preview=True,
+        )

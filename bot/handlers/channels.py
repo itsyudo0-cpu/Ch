@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
 from aiogram.fsm.context import FSMContext
@@ -11,7 +12,13 @@ from bot.keyboards import (
     cancel_keyboard,
     channels_list_keyboard,
 )
-from bot.states import ConnectChannelStates
+from bot.states import ChannelTemplateStates, ConnectChannelStates
+from bot.utils.button_parser import (
+    ButtonParseError,
+    parse_template,
+    template_setting_key,
+)
+from bot.keyboards import main_menu_inline_keyboard
 from bot.utils.telegram_helpers import verify_channel_and_permissions
 
 router = Router(name="channels_router")
@@ -196,3 +203,61 @@ async def cb_channel_disconnect(
             reply_markup=channels_list_keyboard(channels),
         )
     await callback.answer("Channel disconnected.")
+
+
+@router.callback_query(F.data.startswith("ch_tpl:"))
+async def cb_channel_template(
+    callback: CallbackQuery, state: FSMContext, db: Database
+) -> None:
+    channel_id = int(callback.data.split(":", 1)[1])  # type: ignore[union-attr]
+    ch = await db.get_channel(callback.from_user.id, channel_id)
+    if not ch:
+        await callback.answer("Channel not found.", show_alert=True)
+        return
+    current = await db.get_setting(template_setting_key(callback.from_user.id, channel_id))
+    await state.set_state(ChannelTemplateStates.waiting_for_template)
+    await state.update_data(tpl_channel_id=channel_id)
+    if callback.message:
+        await callback.message.edit_text(
+            f"🎨 <b>Button format — {html.escape(ch.title)}</b>\n\n"
+            "Send the format WITHOUT links. When you make a post, just send the "
+            "links in the same order and the buttons are ready.\n\n"
+            "<pre>#g Buy Now - | #r Info -</pre>\n"
+            "Colors: <code>#g</code> green · <code>#b</code> blue · <code>#r</code> red · "
+            "<code>#n</code> plain. One row per line, <code>|</code> = same row.\n"
+            "Send <code>clear</code> to remove the format.\n\n"
+            + (
+                f"<b>Current:</b>\n<pre>{html.escape(current)}</pre>"
+                if current
+                else "No format saved yet."
+            ),
+            parse_mode="HTML",
+            reply_markup=cancel_keyboard(),
+        )
+    await callback.answer()
+
+
+@router.message(ChannelTemplateStates.waiting_for_template, F.text)
+async def msg_save_template(
+    message: Message, state: FSMContext, db: Database
+) -> None:
+    data = await state.get_data()
+    key = template_setting_key(message.from_user.id, data["tpl_channel_id"])  # type: ignore[union-attr]
+    raw = (message.text or "").strip()
+    if raw.lower() in {"clear", "off", "remove"}:
+        await db.delete_setting(key)
+        note = "🗑 Format removed."
+    else:
+        try:
+            parse_template(raw)
+        except ButtonParseError as exc:
+            await message.answer(
+                f"❌ {html.escape(str(exc))}\nSend again:",
+                parse_mode="HTML",
+                reply_markup=cancel_keyboard(),
+            )
+            return
+        await db.set_setting(key, raw)
+        note = "✅ Format saved. Now just send links while making a post."
+    await state.clear()
+    await message.answer(note, reply_markup=main_menu_inline_keyboard())

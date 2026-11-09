@@ -7,13 +7,13 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
+from aiogram.types import ReplyKeyboardRemove
 from bot.config import Settings
 from bot.db import Database
 from bot.keyboards import (
     BTN_HELP,
     cancel_keyboard,
     main_menu_inline_keyboard,
-    main_menu_reply_keyboard,
 )
 from bot.states import WelcomeStates
 
@@ -82,7 +82,7 @@ async def _send_welcome(message: Message, db: Database) -> None:
                 photo=file_id,
                 caption=caption[:MAX_CAPTION_LEN],
                 parse_mode="HTML",
-                reply_markup=main_menu_reply_keyboard(),
+                reply_markup=ReplyKeyboardRemove(),
             )
             return
         except Exception as exc:  # stale file_id / bad HTML -> plain welcome
@@ -90,7 +90,7 @@ async def _send_welcome(message: Message, db: Database) -> None:
     await message.answer(
         caption if not file_id else WELCOME_TEXT,
         parse_mode="HTML",
-        reply_markup=main_menu_reply_keyboard(),
+        reply_markup=ReplyKeyboardRemove(),
     )
 
 
