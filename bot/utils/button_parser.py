@@ -394,3 +394,82 @@ def build_url_inline_keyboard(
 ) -> InlineKeyboardMarkup | None:
     """Backward compatible alias: URL buttons only (vote buttons are skipped)."""
     return build_inline_keyboard(rows)
+
+
+# ------------------------------------------------ per-channel button format
+_LINK_RE = re.compile(r"^(?:https?|tg)://", re.IGNORECASE)
+
+
+def template_setting_key(user_id: int, channel_id: int) -> str:
+    return f"tpl:{user_id}:{channel_id}"
+
+
+def parse_links(text: str) -> list[str] | None:
+    """A message that contains ONLY links -> validated list, otherwise None."""
+    tokens = [t for t in re.split(r"[\s|,]+", (text or "").strip()) if t]
+    if not tokens or not all(_LINK_RE.match(t) for t in tokens):
+        return None
+    return [validate_button_url(t) for t in tokens]
+
+
+def parse_template(raw: str) -> list[list[dict[str, str]]]:
+    """
+    Channel button format, e.g.  "#g Buy Now - | #r Info -".
+    A button without a link is an open slot (filled later); with a link it is
+    fixed; "Text - vote" is a vote button.
+    """
+    rows: list[list[dict[str, str]]] = []
+    for line in (raw or "").strip().splitlines():
+        row: list[dict[str, str]] = []
+        for seg in line.split("|"):
+            seg, style = extract_color_tag(seg.strip())
+            if not seg:
+                continue
+            if seg.endswith("-"):
+                text, target = seg[:-1].strip(), ""
+            elif " - " in seg:
+                text, target = (x.strip() for x in seg.rsplit(" - ", 1))
+            else:
+                text, target = seg, ""
+            if not text or len(text) > MAX_BUTTON_TEXT_LEN:
+                raise ButtonParseError(f"Bad button text: '{seg[:30]}'.")
+            btn: dict[str, str] = {"text": text}
+            if target.lower() == VOTE_KEYWORD:
+                btn["vote"] = "1"
+            elif target:
+                btn["url"] = validate_button_url(target)
+            else:
+                btn["slot"] = "1"
+            if style:
+                btn["style"] = style
+            row.append(btn)
+        if len(row) > MAX_BUTTONS_PER_ROW:
+            raise ButtonParseError("Too many buttons in one row (max 8).")
+        if row:
+            rows.append(row)
+    if not rows:
+        raise ButtonParseError("No buttons found. Example: #g Buy Now - | #r Info -")
+    return rows
+
+
+def fill_template(
+    template: list[list[dict[str, str]]], links: list[str]
+) -> list[list[dict[str, str]]]:
+    need = sum(1 for r in template for b in r if b.get("slot"))
+    if len(links) < need:
+        raise ButtonParseError(
+            f"A channel format needs {need} link(s) but you sent {len(links)}."
+        )
+    it = iter(links)
+    out: list[list[dict[str, str]]] = []
+    for row in template:
+        new_row: list[dict[str, str]] = []
+        for b in row:
+            nb = {k: v for k, v in b.items() if k not in {"slot", "vote"}}
+            if b.get("slot"):
+                nb["url"] = next(it)
+            elif b.get("vote"):
+                nb["vote"] = str(next_vote_id(out + [new_row]))
+            new_row.append(nb)
+        out.append(new_row)
+    return out
