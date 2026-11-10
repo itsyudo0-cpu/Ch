@@ -397,6 +397,7 @@ def build_url_inline_keyboard(
 
 
 # ------------------------------------------------ per-channel button format
+LINK_PLACEHOLDER = "{link}"
 _LINK_RE = re.compile(r"^(?:https?|tg)://", re.IGNORECASE)
 
 
@@ -436,6 +437,10 @@ def parse_template(raw: str) -> list[list[dict[str, str]]]:
             btn: dict[str, str] = {"text": text}
             if target.lower() == VOTE_KEYWORD:
                 btn["vote"] = "1"
+            elif LINK_PLACEHOLDER in target.lower():
+                btn["slot"] = "1"
+                if target.strip().lower() != LINK_PLACEHOLDER:
+                    btn["pattern"] = target  # e.g. https://site.com/?ref={link}
             elif target:
                 btn["url"] = validate_button_url(target)
             else:
@@ -456,20 +461,46 @@ def fill_template(
     template: list[list[dict[str, str]]], links: list[str]
 ) -> list[list[dict[str, str]]]:
     need = sum(1 for r in template for b in r if b.get("slot"))
+    if len(links) == 1 and need > 1:
+        links = links * need  # one changing link used in every {link} spot
     if len(links) < need:
         raise ButtonParseError(
-            f"A channel format needs {need} link(s) but you sent {len(links)}."
+            f"This format needs {need} link(s) but you sent {len(links)}."
         )
     it = iter(links)
     out: list[list[dict[str, str]]] = []
     for row in template:
         new_row: list[dict[str, str]] = []
         for b in row:
-            nb = {k: v for k, v in b.items() if k not in {"slot", "vote"}}
+            nb = {k: v for k, v in b.items() if k not in {"slot", "vote", "pattern"}}
             if b.get("slot"):
-                nb["url"] = next(it)
+                link = next(it)
+                nb["url"] = (
+                    validate_button_url(b["pattern"].replace("{link}", link))
+                    if b.get("pattern")
+                    else link
+                )
             elif b.get("vote"):
                 nb["vote"] = str(next_vote_id(out + [new_row]))
             new_row.append(nb)
         out.append(new_row)
     return out
+
+
+def describe_template(template: list[list[dict[str, str]]]) -> str:
+    """Human readable summary: 🟢 Buy Now → {link}"""
+    dot = {"success": "🟢", "danger": "🔴", "primary": "🔵", "default": "⚪"}
+    lines = []
+    for row in template:
+        parts = []
+        for b in row:
+            style = dot.get(b.get("style", "primary"), "🔵")
+            if b.get("vote"):
+                target = "🗳 vote"
+            elif b.get("slot"):
+                target = b.get("pattern", LINK_PLACEHOLDER)
+            else:
+                target = b.get("url", "")
+            parts.append(f"{style} {b['text']} → {target}")
+        lines.append("  |  ".join(parts))
+    return "\n".join(lines)
