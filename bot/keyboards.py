@@ -81,12 +81,16 @@ def main_menu_inline_keyboard() -> InlineKeyboardMarkup:
             _btn("🛡 Join Filters", cb="menu:tool:j", style=BLUE),
             _btn("🧾 Event Log", cb="menu:events", style=BLUE),
         ],
-        [_btn("📢 My Channels", cb="menu:channels", style=BLUE), _btn("⚙️ Settings", cb="admin:home")],
+        [
+            _btn("📢 My Channels", cb="menu:channels", style=BLUE),
+            _btn("🎨 Button Format", cb="menu:tool:f", style=GREEN),
+        ],
+        [_btn("⚙️ Settings", cb="admin:home"), guide],
     ]
-    last = [guide]
+    last = []
     if MENU_LINKS.get("support"):
         last.append(_btn("🆘 Support", url=MENU_LINKS["support"], style=BLUE))
-    rows.append(last)
+        rows.append(last)
     return _kb(rows)
 
 
