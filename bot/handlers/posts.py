@@ -26,6 +26,7 @@ from bot.utils.button_parser import (
     cycle_button_style,
     fill_template,
     parse_links,
+    describe_template,
     parse_template,
     template_setting_key,
     has_vote_buttons,
@@ -49,6 +50,7 @@ def _format_button_builder_status(
     channel_title: str,
     content_type: str,
     rows: list[list[dict[str, str]]],
+    hint: str = "",
 ) -> str:
     total_btns = sum(len(r) for r in rows)
     dsl_preview = format_buttons_dsl(rows)
@@ -60,6 +62,7 @@ def _format_button_builder_status(
         f"Buttons: <b>{total_btns}</b> across <b>{len(rows)}</b> row(s)\n\n"
         f"<b>Current URL Buttons:</b>\n"
         f"<pre>{escaped_dsl}</pre>\n\n"
+        f"{hint}"
         "You can send button definitions directly as text (one row per line, "
         "multiple buttons separated by <code>|</code>):\n"
         "<code>Button Text - https://example.com | Second - https://example.org</code>\n"
@@ -175,7 +178,24 @@ async def cb_channels_continue(
         return
 
     title = ", ".join(c.title for c in chosen)
+    hint_parts = []
+    for c in chosen:
+        raw_tpl = await db.get_setting(template_setting_key(callback.from_user.id, c.channel_id))
+        if raw_tpl:
+            try:
+                summary = describe_template(parse_template(raw_tpl))
+            except Exception:
+                continue
+            hint_parts.append(f"<b>{html.escape(c.title)}</b>\n<pre>{html.escape(summary)}</pre>")
+    format_hint = (
+        "🎨 <b>Saved format found:</b>\n"
+        + "\n".join(hint_parts)
+        + "➡️ <b>Just send the link</b> and the buttons are created automatically.\n\n"
+        if hint_parts
+        else "💡 <i>Tip: save a 🎨 Button Format once and only send the link each time.</i>\n\n"
+    )
     await state.update_data(
+        format_hint=format_hint,
         channel_ids=[c.channel_id for c in chosen],
         channel_id=chosen[0].channel_id,
         channel_title=title,
@@ -228,6 +248,7 @@ async def msg_receive_post_content(
 
     await message.answer(
         _format_button_builder_status(
+            hint=data.get("format_hint", ""),
             channel_title=data["channel_title"],
             content_type=content_type,
             rows=data.get("buttons", []),
@@ -266,6 +287,7 @@ async def cb_draft_back_to_builder(
     if callback.message:
         await callback.message.edit_text(
             _format_button_builder_status(
+            hint=data.get("format_hint", ""),
                 channel_title=data.get("channel_title", "Channel"),
                 content_type=data.get("content_type", "text"),
                 rows=data.get("buttons", []),
@@ -324,6 +346,7 @@ async def msg_draft_parse_buttons(
     await state.set_state(NewPostStates.managing_buttons)
     await message.answer(
         _format_button_builder_status(
+            hint=data.get("format_hint", ""),
             channel_title=data.get("channel_title", "Channel"),
             content_type=data.get("content_type", "text"),
             rows=updated_rows,
@@ -342,6 +365,7 @@ async def cb_draft_clear_buttons(
     if callback.message:
         await callback.message.edit_text(
             _format_button_builder_status(
+            hint=data.get("format_hint", ""),
                 channel_title=data.get("channel_title", "Channel"),
                 content_type=data.get("content_type", "text"),
                 rows=[],
@@ -373,6 +397,7 @@ async def cb_draft_remove_single_button(
     if callback.message:
         await callback.message.edit_text(
             _format_button_builder_status(
+            hint=data.get("format_hint", ""),
                 channel_title=data.get("channel_title", "Channel"),
                 content_type=data.get("content_type", "text"),
                 rows=updated_rows,
@@ -402,6 +427,7 @@ async def cb_draft_recolor_button(callback: CallbackQuery, state: FSMContext) ->
     if callback.message:
         await callback.message.edit_text(
             _format_button_builder_status(
+            hint=data.get("format_hint", ""),
                 channel_title=data.get("channel_title", "Channel"),
                 content_type=data.get("content_type", "text"),
                 rows=updated_rows,
@@ -534,6 +560,7 @@ async def cb_preview_back_to_edit_buttons(
     if callback.message:
         await callback.message.edit_text(
             _format_button_builder_status(
+            hint=data.get("format_hint", ""),
                 channel_title=data.get("channel_title", "Channel"),
                 content_type=data.get("content_type", "text"),
                 rows=data.get("buttons", []),

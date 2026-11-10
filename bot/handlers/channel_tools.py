@@ -38,6 +38,7 @@ KINDS = {
     "w": ("👋 Welcome message", "welcome", DEFAULT_WELCOME),
     "g": ("🏃 Goodbye message", "goodbye", DEFAULT_GOODBYE),
     "j": ("🛡 Join filters", "jf", ""),
+    "f": ("🎨 Button Format", "tpl", ""),
 }
 
 
@@ -119,7 +120,13 @@ async def cb_tool_picker(callback: CallbackQuery, state: FSMContext, db: Databas
     else:
         text = f"{label}\n{DIVIDER}\n\nChoose a channel:"
         rows = [
-            [_btn(f"📢 {c.title}", cb=f"cfp:{kind}:{c.channel_id}", style=BLUE)]
+            [
+                _btn(
+                    f"📢 {c.title}",
+                    cb=f"ch_tpl:{c.channel_id}" if kind == "f" else f"cfp:{kind}:{c.channel_id}",
+                    style=BLUE,
+                )
+            ]
             for c in channels
         ]
     rows.append([_btn("⬅️ Back to Menu", cb="menu:home")])

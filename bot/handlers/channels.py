@@ -15,6 +15,7 @@ from bot.keyboards import (
 from bot.states import ChannelTemplateStates, ConnectChannelStates
 from bot.utils.button_parser import (
     ButtonParseError,
+    describe_template,
     parse_template,
     template_setting_key,
 )
@@ -219,17 +220,21 @@ async def cb_channel_template(
     await state.update_data(tpl_channel_id=channel_id)
     if callback.message:
         await callback.message.edit_text(
-            f"🎨 <b>Button format — {html.escape(ch.title)}</b>\n\n"
-            "Send the format WITHOUT links. When you make a post, just send the "
-            "links in the same order and the buttons are ready.\n\n"
-            "<pre>#g Buy Now - | #r Info -</pre>\n"
+            f"🎨 <b>Button Format — {html.escape(ch.title)}</b>\n\n"
+            "Send your buttons <b>once</b>. Put <code>{link}</code> where the link "
+            "changes every time. Fixed links stay as they are.\n\n"
+            "<b>Example:</b>\n"
+            "<pre>#g Buy Now - {link} | #r Channel - https://t.me/mychannel\n"
+            "#b More Info - https://example.com</pre>\n"
             "Colors: <code>#g</code> green · <code>#b</code> blue · <code>#r</code> red · "
-            "<code>#n</code> plain. One row per line, <code>|</code> = same row.\n"
+            "<code>#n</code> plain. One row per line, <code>|</code> = same row.\n\n"
+            "<b>Then, when you create a post:</b> just send the new link — the whole "
+            "button set is built automatically.\n"
             "Send <code>clear</code> to remove the format.\n\n"
             + (
-                f"<b>Current:</b>\n<pre>{html.escape(current)}</pre>"
+                f"<b>Current format:</b>\n<pre>{html.escape(describe_template(parse_template(current)))}</pre>"
                 if current
-                else "No format saved yet."
+                else "<i>No format saved yet.</i>"
             ),
             parse_mode="HTML",
             reply_markup=cancel_keyboard(),
@@ -258,6 +263,11 @@ async def msg_save_template(
             )
             return
         await db.set_setting(key, raw)
-        note = "✅ Format saved. Now just send links while making a post."
+        note = (
+            "✅ <b>Format saved!</b>\n<pre>"
+            + html.escape(describe_template(parse_template(raw)))
+            + "</pre>\nWhen you create a post for this channel, just send the link — "
+            "the buttons are created automatically."
+        )
     await state.clear()
-    await message.answer(note, reply_markup=main_menu_inline_keyboard())
+    await message.answer(note, parse_mode="HTML", reply_markup=main_menu_inline_keyboard())
